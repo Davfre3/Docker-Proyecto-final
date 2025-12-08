@@ -260,6 +260,7 @@ def predecir_batch(solicitudes: List[Dict]) -> List[Dict]:
             'probabilidad_incumplimiento': round(prob_float, 4),
             'nivel_riesgo': calcular_nivel_riesgo(prob_float),
             'dias_restantes': sol.get('dias_restantes'),
+            'estado': sol.get('estado', 'EN PROCESO'),  # Incluir estado
             'factores_riesgo': identificar_factores_riesgo(
                 sol['dias_transcurridos'],
                 sol['dias_umbral'],
@@ -309,4 +310,58 @@ def get_modelo_info() -> Dict:
         "timestamp": datetime.fromtimestamp(_modelo_timestamp) if _modelo_timestamp else None,
         "accuracy": _modelo_accuracy,
         "path": settings.model_path
+    }
+
+
+def get_feature_importance() -> Dict:
+    """
+    Obtiene la importancia de cada variable en el modelo.
+    
+    Returns:
+        Diccionario con nombres de features, importancias y descripciones
+    """
+    modelo = get_modelo()
+    
+    if not modelo or not hasattr(modelo.named_steps.get('classifier'), 'feature_importances_'):
+        return {
+            "error": "Modelo no disponible o no soporta feature importance",
+            "feature_names": [],
+            "importances": []
+        }
+    
+    # Nombres de las features
+    feature_names = ['dias_transcurridos', 'dias_umbral', 'id_rol']
+    
+    # Descripciones amigables
+    descripciones = {
+        'dias_transcurridos': 'Días transcurridos desde que se creó la solicitud',
+        'dias_umbral': 'Días totales permitidos por el SLA (umbral de tiempo)',
+        'id_rol': 'Rol asignado a la solicitud (tipo de personal)'
+    }
+    
+    # Obtener importancias del clasificador
+    importances = modelo.named_steps['classifier'].feature_importances_
+    
+    # Crear lista ordenada por importancia (mayor a menor)
+    features_data = [
+        {
+            "nombre": name,
+            "importancia": float(imp),
+            "porcentaje": float(imp * 100),
+            "descripcion": descripciones[name]
+        }
+        for name, imp in zip(feature_names, importances)
+    ]
+    
+    # Ordenar por importancia descendente
+    features_data.sort(key=lambda x: x['importancia'], reverse=True)
+    
+    return {
+        "features": features_data,
+        "interpretacion": {
+            "alto": "Variables con >40% de importancia tienen impacto crítico en las predicciones",
+            "medio": "Variables con 20-40% tienen impacto significativo",
+            "bajo": "Variables con <20% tienen impacto menor pero relevante"
+        },
+        "recomendacion": "Enfoque los planes de acción en optimizar las variables con mayor importancia"
     }

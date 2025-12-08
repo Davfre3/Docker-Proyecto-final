@@ -50,7 +50,7 @@ coverage.xml
 *.mo
 *.pot
 
-# Environments
+# Environments (solo archivos locales con credenciales)
 .env
 .venv
 env/
@@ -58,6 +58,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# NOTA: .env.example, Dockerfile y docker-compose.yml SÍ se suben al repo
 
 # IDE
 .idea/

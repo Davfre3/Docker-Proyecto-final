@@ -298,7 +298,7 @@ async def obtener_resumen():
     """
     Resumen rápido para KPIs del dashboard.
     
-    Retorna conteos por nivel de riesgo y promedio general.
+    Retorna conteos por nivel de riesgo, promedio general y estados de solicitudes.
     Tiempo de respuesta esperado: < 300ms
     """
     try:
@@ -315,7 +315,10 @@ async def obtener_resumen():
                 altas=0,
                 medias=0,
                 bajas=0,
-                promedio_riesgo=0
+                promedio_riesgo=0,
+                en_proceso=0,
+                completadas=0,
+                canceladas=0
             )
         
         # Predicción batch
@@ -326,11 +329,19 @@ async def obtener_resumen():
         
         # Contar por nivel
         niveles = {"CRITICO": 0, "ALTO": 0, "MEDIO": 0, "BAJO": 0}
+        estados = {"EN PROCESO": 0, "COMPLETADO": 0, "CANCELADO": 0}
         suma_prob = 0
         
         for r in resultados:
             niveles[r['nivel_riesgo']] += 1
             suma_prob += r['probabilidad_incumplimiento']
+            
+            # Contar estados (verificar si existe la clave)
+            estado = r.get('estado', 'EN PROCESO').upper()
+            if estado in estados:
+                estados[estado] += 1
+            elif estado == 'EN PROCESO' or estado == 'PENDIENTE' or estado == 'ACTIVO':
+                estados['EN PROCESO'] += 1
         
         promedio = (suma_prob / len(resultados) * 100) if resultados else 0
         
@@ -340,7 +351,10 @@ async def obtener_resumen():
             altas=niveles["ALTO"],
             medias=niveles["MEDIO"],
             bajas=niveles["BAJO"],
-            promedio_riesgo=round(promedio, 1)
+            promedio_riesgo=round(promedio, 1),
+            en_proceso=estados["EN PROCESO"],
+            completadas=estados["COMPLETADO"],
+            canceladas=estados["CANCELADO"]
         )
         
     except Exception as e:
@@ -409,6 +423,34 @@ async def reentrenar_modelo():
 async def info_modelo():
     """Obtiene información del modelo actual"""
     return get_modelo_info()
+
+
+@app.get("/modelo/importancia", tags=["Admin"])
+async def importancia_variables():
+    """
+    Obtiene la importancia de cada variable en el modelo.
+    
+    Útil para identificar qué factores tienen más peso en las predicciones
+    y tomar decisiones informadas para planes de acción.
+    
+    Retorna:
+    - feature_names: Nombres de las variables
+    - importances: Importancia de cada variable (suma = 1)
+    - descripcion: Descripción de qué representa cada variable
+    """
+    try:
+        from .model import get_feature_importance
+        
+        importancia = await asyncio.get_event_loop().run_in_executor(
+            executor,
+            get_feature_importance
+        )
+        
+        return importancia
+        
+    except Exception as e:
+        logger.error(f"Error al obtener importancia de variables: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================

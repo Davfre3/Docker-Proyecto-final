@@ -57,6 +57,9 @@ class ResumenPrediccion(BaseModel):
     medias: int = Field(..., ge=0)
     bajas: int = Field(..., ge=0)
     promedio_riesgo: float = Field(..., ge=0, le=100)
+    en_proceso: int = Field(default=0, ge=0, description="Solicitudes en proceso")
+    completadas: int = Field(default=0, ge=0, description="Solicitudes completadas")
+    canceladas: int = Field(default=0, ge=0, description="Solicitudes canceladas")
 
     class Config:
         json_schema_extra = {
@@ -66,7 +69,10 @@ class ResumenPrediccion(BaseModel):
                 "altas": 28,
                 "medias": 45,
                 "bajas": 65,
-                "promedio_riesgo": 35.5
+                "promedio_riesgo": 35.5,
+                "en_proceso": 120,
+                "completadas": 25,
+                "canceladas": 5
             }
         }
 
