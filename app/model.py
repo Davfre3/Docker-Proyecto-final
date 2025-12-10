@@ -23,6 +23,12 @@ settings = get_settings()
 _modelo: Optional[Pipeline] = None
 _modelo_timestamp: Optional[float] = None
 _modelo_accuracy: Optional[float] = None
+_modelo_fecha_inicio: Optional[str] = None
+_modelo_fecha_fin: Optional[str] = None
+_modelo_registros: Optional[int] = None
+_modelo_fecha_inicio: Optional[str] = None
+_modelo_fecha_fin: Optional[str] = None
+_modelo_registros: Optional[int] = None
 
 
 def calcular_nivel_riesgo(probabilidad: float) -> str:
@@ -153,7 +159,7 @@ def get_modelo() -> Pipeline:
     Returns:
         Modelo entrenado listo para predicciones
     """
-    global _modelo, _modelo_timestamp, _modelo_accuracy
+    global _modelo, _modelo_timestamp, _modelo_accuracy, _modelo_fecha_inicio, _modelo_fecha_fin, _modelo_registros
     
     now = datetime.now().timestamp()
     
@@ -174,6 +180,17 @@ def get_modelo() -> Pipeline:
         try:
             _modelo = joblib.load(model_path)
             _modelo_timestamp = now
+            
+            # Cargar metadatos si existen
+            metadata_path = model_path.replace('.pkl', '_metadata.pkl')
+            if os.path.exists(metadata_path):
+                metadata = joblib.load(metadata_path)
+                _modelo_fecha_inicio = metadata.get('fecha_inicio')
+                _modelo_fecha_fin = metadata.get('fecha_fin')
+                _modelo_registros = metadata.get('registros')
+                _modelo_accuracy = metadata.get('accuracy')
+                logger.info(f"Metadatos cargados: {metadata}")
+            
             logger.info(f"Modelo cargado desde {model_path}")
             return _modelo
         except Exception as e:
@@ -182,6 +199,7 @@ def get_modelo() -> Pipeline:
     # Entrenar nuevo modelo
     _modelo, _modelo_accuracy = entrenar_modelo()
     _modelo_timestamp = now
+    _modelo_registros = None
     
     # Guardar modelo
     try:
@@ -251,16 +269,21 @@ def predecir_batch(solicitudes: List[Dict]) -> List[Dict]:
     
     # Construir resultados
     resultados = []
-    for sol, prob in zip(solicitudes, probs):
+    for i, (sol, prob) in enumerate(zip(solicitudes, probs)):
         prob_float = float(prob)
+        # Debug: Ver qué campos tiene la primera solicitud
+        if i == 0:
+            logger.info(f"🔍 DEBUG - Campos de solicitud: {list(sol.keys())}")
+            logger.info(f"🔍 DEBUG - estado_cumplimiento: {sol.get('estado_cumplimiento')}")
+        
         resultados.append({
             'id_solicitud': sol['id_solicitud'],
             'codigo_sla': sol.get('codigo_sla'),
             'nombre_rol': sol.get('nombre_rol'),
+            'estado_cumplimiento': sol.get('estado_cumplimiento'),  # Estado SLA
             'probabilidad_incumplimiento': round(prob_float, 4),
             'nivel_riesgo': calcular_nivel_riesgo(prob_float),
             'dias_restantes': sol.get('dias_restantes'),
-            'estado': sol.get('estado', 'EN PROCESO'),  # Incluir estado
             'factores_riesgo': identificar_factores_riesgo(
                 sol['dias_transcurridos'],
                 sol['dias_umbral'],
@@ -271,30 +294,60 @@ def predecir_batch(solicitudes: List[Dict]) -> List[Dict]:
     return resultados
 
 
-def forzar_reentrenamiento() -> Dict:
+def forzar_reentrenamiento(fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None) -> Dict:
     """
     Fuerza el reentrenamiento del modelo.
+    
+    Args:
+        fecha_inicio: Fecha inicial del rango (YYYY-MM-DD) o None para todos los datos
+        fecha_fin: Fecha final del rango (YYYY-MM-DD) o None para todos los datos
     
     Returns:
         Información del reentrenamiento
     """
-    global _modelo, _modelo_timestamp, _modelo_accuracy
+    global _modelo, _modelo_timestamp, _modelo_accuracy, _modelo_fecha_inicio, _modelo_fecha_fin, _modelo_registros
     
-    datos = get_datos_entrenamiento(limite=settings.max_training_samples)
+    # Obtener datos con o sin rango de fechas
+    datos = get_datos_entrenamiento(
+        limite=settings.max_training_samples,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin
+    )
+    
     _modelo, _modelo_accuracy = entrenar_modelo(datos)
     _modelo_timestamp = datetime.now().timestamp()
+    _modelo_fecha_inicio = fecha_inicio
+    _modelo_fecha_fin = fecha_fin
+    _modelo_registros = len(datos)
     
-    # Guardar modelo
+    # Guardar modelo y metadatos
     try:
         os.makedirs(os.path.dirname(settings.model_path), exist_ok=True)
+        
+        # Guardar modelo
         joblib.dump(_modelo, settings.model_path)
+        
+        # Guardar metadatos
+        metadata = {
+            'fecha_inicio': fecha_inicio,
+            'fecha_fin': fecha_fin,
+            'registros': len(datos),
+            'accuracy': _modelo_accuracy,
+            'timestamp': datetime.now().isoformat()
+        }
+        metadata_path = settings.model_path.replace('.pkl', '_metadata.pkl')
+        joblib.dump(metadata, metadata_path)
+        
+        logger.info(f"Modelo guardado con metadatos: {metadata}")
     except Exception as e:
         logger.error(f"Error al guardar modelo: {e}")
     
     return {
         "samples_used": len(datos),
         "accuracy": _modelo_accuracy,
-        "timestamp": datetime.now()
+        "timestamp": datetime.now(),
+        "fecha_inicio": fecha_inicio,
+        "fecha_fin": fecha_fin
     }
 
 
@@ -309,7 +362,10 @@ def get_modelo_info() -> Dict:
         "loaded": _modelo is not None,
         "timestamp": datetime.fromtimestamp(_modelo_timestamp) if _modelo_timestamp else None,
         "accuracy": _modelo_accuracy,
-        "path": settings.model_path
+        "path": settings.model_path,
+        "fecha_inicio": _modelo_fecha_inicio,
+        "fecha_fin": _modelo_fecha_fin,
+        "registros": _modelo_registros
     }
 
 

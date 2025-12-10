@@ -3,7 +3,7 @@ FastAPI - Microservicio de Predicción SLA
 """
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
@@ -172,19 +172,19 @@ async def predecir_individual(request: PrediccionRequest):
 
 @app.get("/predecir/criticas", response_model=List[PrediccionResponse], tags=["Predicción"])
 async def predecir_criticas(
-    limite: int = Query(default=20, ge=1, le=100, description="Máximo de resultados")
+    limite: int = Query(default=100, ge=1, le=500, description="Máximo de resultados")
 ):
     """
-    Predicción de solicitudes críticas (próximas a vencer).
+    Predicción de TODAS las solicitudes EN PROCESO.
     
-    Optimizado para dashboard. Solo analiza solicitudes con 70%+ del tiempo consumido.
-    Tiempo de respuesta esperado: < 200ms
+    Devuelve todas las solicitudes en proceso de TODOS los SLAs para predecir
+    cuáles cumplirán y cuáles no cumplirán el SLA.
     """
     try:
-        # Obtener solicitudes críticas
+        # Obtener TODAS las solicitudes EN_PROCESO (no solo críticas)
         solicitudes = await asyncio.get_event_loop().run_in_executor(
             executor,
-            lambda: get_solicitudes_activas(solo_criticas=True, limite=limite)
+            lambda: get_solicitudes_activas(solo_criticas=False, limite=limite)
         )
         
         if not solicitudes:
@@ -202,6 +202,7 @@ async def predecir_criticas(
                 id_solicitud=r['id_solicitud'],
                 codigo_sla=r['codigo_sla'],
                 nombre_rol=r['nombre_rol'],
+                estado_cumplimiento_sla=r.get('estado_cumplimiento'),
                 probabilidad_incumplimiento=r['probabilidad_incumplimiento'],
                 nivel_riesgo=r['nivel_riesgo'],
                 dias_restantes=r['dias_restantes'],
@@ -393,9 +394,15 @@ async def obtener_tendencias(
 
 
 @app.post("/modelo/reentrenar", response_model=ReentrenamientoResponse, tags=["Admin"])
-async def reentrenar_modelo():
+async def reentrenar_modelo(
+    fecha_inicio: Optional[str] = Query(None, description="Fecha inicial (YYYY-MM-DD)"),
+    fecha_fin: Optional[str] = Query(None, description="Fecha final (YYYY-MM-DD)")
+):
     """
-    Fuerza el reentrenamiento del modelo con datos actuales.
+    Fuerza el reentrenamiento del modelo.
+    
+    Si no se especifican fechas, usa todos los datos históricos.
+    Si se especifican fechas, entrena solo con datos de ese rango.
     
     Uso: Llamar periódicamente o cuando hay muchos datos nuevos.
     Este endpoint puede tardar varios segundos.
@@ -403,7 +410,7 @@ async def reentrenar_modelo():
     try:
         resultado = await asyncio.get_event_loop().run_in_executor(
             executor,
-            forzar_reentrenamiento
+            lambda: forzar_reentrenamiento(fecha_inicio, fecha_fin)
         )
         
         return ReentrenamientoResponse(

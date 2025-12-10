@@ -19,6 +19,7 @@ class PrediccionResponse(BaseModel):
     id_solicitud: int
     codigo_sla: Optional[str] = None
     nombre_rol: Optional[str] = None
+    estado_cumplimiento_sla: Optional[str] = None
     probabilidad_incumplimiento: float = Field(..., ge=0, le=1)
     nivel_riesgo: str = Field(..., pattern="^(CRITICO|ALTO|MEDIO|BAJO)$")
     dias_restantes: Optional[int] = None

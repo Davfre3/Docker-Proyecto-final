@@ -101,6 +101,7 @@ def get_solicitudes_activas(
                 INNER JOIN config_sla c ON s.id_sla = c.id_sla
                 INNER JOIN rol_registro r ON s.id_rol_registro = r.id_rol_registro
                 WHERE c.es_activo = 1
+                    AND s.estado_cumplimiento_sla LIKE 'EN_PROCESO_%'
                     {estado_filter}
                     {sla_filter}
             """
@@ -114,6 +115,55 @@ def get_solicitudes_activas(
                 """
                 
                 result = session.execute(text(criticas_query), {"limite": limite})
+                solicitudes = [dict(row._mapping) for row in result]
+                return solicitudes
+            
+            # Si se especifica límite, usarlo en lugar de paginación
+            if limite > 0 and limite < 10000:
+                # Construir filtros adicionales
+                where_adicional = ""
+                if not incluir_historicas:
+                    where_adicional += " AND s.estado_solicitud NOT IN ('COMPLETADA', 'CANCELADA')"
+                if codigo_sla:
+                    where_adicional += f" AND c.codigo_sla = '{codigo_sla}'"
+                
+                # Obtener N registros con distribución equilibrada por SLA
+                # Usa ROW_NUMBER() OVER (PARTITION BY codigo_sla) para obtener
+                # una muestra representativa de cada SLA
+                limited_query = f"""
+                    WITH RankedSolicitudes AS (
+                        SELECT 
+                            s.id_solicitud as id_solicitud,
+                            DATEDIFF(day, s.fecha_solicitud, GETDATE()) as dias_transcurridos,
+                            c.dias_umbral as dias_umbral,
+                            s.id_rol_registro as id_rol,
+                            c.codigo_sla as codigo_sla,
+                            r.nombre_rol as nombre_rol,
+                            r.bloque_tech as bloque_tech,
+                            c.dias_umbral - DATEDIFF(day, s.fecha_solicitud, GETDATE()) as dias_restantes,
+                            s.estado_solicitud as estado_solicitud,
+                            s.estado_cumplimiento_sla as estado_cumplimiento,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY c.codigo_sla 
+                                ORDER BY (c.dias_umbral - DATEDIFF(day, s.fecha_solicitud, GETDATE())) ASC
+                            ) as rn
+                        FROM solicitud s
+                        INNER JOIN config_sla c ON s.id_sla = c.id_sla
+                        INNER JOIN rol_registro r ON s.id_rol_registro = r.id_rol_registro
+                        WHERE c.es_activo = 1
+                            AND s.estado_cumplimiento_sla LIKE 'EN_PROCESO_%'
+                            {where_adicional}
+                    )
+                    SELECT 
+                        id_solicitud, dias_transcurridos, dias_umbral, id_rol,
+                        codigo_sla, nombre_rol, bloque_tech, dias_restantes,
+                        estado_solicitud, estado_cumplimiento
+                    FROM RankedSolicitudes
+                    ORDER BY rn, codigo_sla
+                    OFFSET 0 ROWS FETCH NEXT :limite ROWS ONLY
+                """
+                
+                result = session.execute(text(limited_query), {"limite": limite})
                 solicitudes = [dict(row._mapping) for row in result]
                 return solicitudes
             
@@ -161,7 +211,7 @@ def get_solicitudes_activas(
             return []
 
 
-def get_datos_entrenamiento(limite: int = 10000) -> List[Dict]:
+def get_datos_entrenamiento(limite: int = 10000, fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None) -> List[Dict]:
     """
     Obtiene datos históricos para entrenar el modelo.
     Solo usa solicitudes completadas (cumplidas o incumplidas).
@@ -173,14 +223,28 @@ def get_datos_entrenamiento(limite: int = 10000) -> List[Dict]:
     
     Args:
         limite: Máximo de registros para entrenamiento
+        fecha_inicio: Fecha inicial del rango (YYYY-MM-DD) o None para todos
+        fecha_fin: Fecha final del rango (YYYY-MM-DD) o None para todos
     
     Returns:
         Lista de diccionarios con datos de entrenamiento
     """
     with get_db_session() as session:
         try:
+            # Construir filtro de fechas
+            filtro_fechas = ""
+            params = {"limite": limite}
+            
+            if fecha_inicio and fecha_fin:
+                filtro_fechas = "AND s.fecha_solicitud BETWEEN :fecha_inicio AND :fecha_fin"
+                params["fecha_inicio"] = fecha_inicio
+                params["fecha_fin"] = fecha_fin
+                logger.info(f"Entrenando con rango: {fecha_inicio} a {fecha_fin}")
+            else:
+                logger.info("Entrenando con todos los datos históricos")
+            
             # Usamos num_dias_sla si está disponible, sino calculamos
-            query = text("""
+            query = text(f"""
                 SELECT TOP (:limite)
                     COALESCE(
                         s.num_dias_sla,
@@ -196,10 +260,11 @@ def get_datos_entrenamiento(limite: int = 10000) -> List[Dict]:
                 INNER JOIN config_sla c ON s.id_sla = c.id_sla
                 WHERE s.estado_cumplimiento_sla IS NOT NULL
                     AND s.estado_cumplimiento_sla NOT LIKE 'EN_PROCESO%'
+                    {filtro_fechas}
                 ORDER BY s.creado_en DESC
             """)
             
-            result = session.execute(query, {"limite": limite})
+            result = session.execute(query, params)
             datos = [dict(row._mapping) for row in result]
             
             logger.info(f"Obtenidos {len(datos)} registros para entrenamiento")
