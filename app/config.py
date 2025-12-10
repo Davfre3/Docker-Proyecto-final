@@ -10,7 +10,16 @@ class Settings(BaseSettings):
     """Configuración de la aplicación"""
     
     # Base de datos - Proyecto1SLA_DB
-    database_url: str = "mssql+pyodbc://sa:YourPassword123@localhost:1433/Proyecto1SLA_DB?driver=ODBC+Driver+17+for+SQL+Server"
+    # Usar autenticación SQL Server (la autenticación de Windows no funciona desde contenedores Linux)
+    database_server: str = "host.docker.internal\\MSSQLSERVER1"
+    database_name: str = "Proyecto1SLA_DB"
+    database_user: str = "sla_user"  # Crear este usuario en SQL Server
+    database_password: str = "SLA_Pass123!"  # Cambiar por una contraseña segura
+    
+    @property
+    def database_url(self) -> str:
+        """Construye la URL de conexión dinámicamente"""
+        return f"mssql+pyodbc://{self.database_user}:{self.database_password}@{self.database_server}/{self.database_name}?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
     
     # Modelo
     model_path: str = "/app/models/sla_model.pkl"
@@ -30,6 +39,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        protected_namespaces = ()  # Permite usar campos con prefijo "model_"
 
 
 @lru_cache()
